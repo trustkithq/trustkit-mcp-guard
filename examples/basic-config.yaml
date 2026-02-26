@@ -1,0 +1,26 @@
+# MCP Guard — basic policy configuration example
+version: 1
+
+# Deny by default — only explicitly allowed tools can be called
+defaultAction: deny
+
+rules:
+  # Allow all read_* tools
+  - tool: "read_*"
+    allow: true
+
+  # Allow search
+  - tool: "search_files"
+    allow: true
+
+  # Allow GitHub read operations
+  - tool: "github_get_*"
+    allow: true
+
+  # Block GitHub write operations
+  - tool: "github_create_*"
+    allow: false
+
+  # Block all filesystem writes
+  - tool: "write_file"
+    allow: false
