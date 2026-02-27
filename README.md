@@ -1,5 +1,13 @@
 # TrustKit MCP Guard
 
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Docker](#docker)
+- [Configuration](#configuration)
+- [License](#license)
+
 AI execution firewall for MCP-based tools.
 
 MCP Guard is a proxy that sits between AI clients and MCP servers, enforcing security policies on tool calls. It validates, controls, and audits every tool execution.

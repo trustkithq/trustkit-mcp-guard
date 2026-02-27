@@ -1,5 +1,12 @@
 # Contributing to MCP Guard
 
+## Table of Contents
+
+- [Setup](#setup)
+- [Development](#development)
+- [Pull Requests](#pull-requests)
+- [License](#license)
+
 We welcome contributions. Here's how to get started.
 
 ## Setup
