@@ -6,6 +6,7 @@ export type {
 	StdioServerConfig,
 	HttpServerConfig,
 	ListenConfig,
+	AuditConfig,
 } from "./config/schema.js";
 
 // Errors
@@ -29,7 +30,11 @@ export type { PolicyDecision, PolicyInput } from "./policy/engine.js";
 export { type PolicyConfig, policyConfigSchema } from "./policy/schema.js";
 
 // Audit
-export { AuditLogger, type AuditEvent } from "./audit/logger.js";
+export { AuditLogger, type AuditEvent, type AuditSink } from "./audit/logger.js";
+
+// Persistence
+export { initPersistence, AuditStore, StatsStore, ToolRegistryStore } from "./persistence/index.js";
+export type { Persistence, ToolStats, ToolRegistryEntry } from "./persistence/index.js";
 
 // Proxy
 export { createProxy, type McpGuardProxy } from "./proxy/index.js";

@@ -24,8 +24,26 @@ describe("guardConfigSchema", () => {
 			expect(result.listen.port).toBe(31415);
 			expect(result.listen.host).toBe("0.0.0.0");
 			expect(result.logLevel).toBe("info");
+			expect(result.audit.dbPath).toBe("~/.mcp-guard/guard.db");
+			expect(result.audit.retentionHours).toBe(24);
 			expect(result.servers).toHaveLength(1);
 			expect(result.servers[0].name).toBe("fs");
+		});
+
+		it("parses custom audit config", () => {
+			const config = {
+				...validStdioConfig,
+				audit: { dbPath: "/tmp/guard.db", retentionHours: 48 },
+			};
+			const result = guardConfigSchema.parse(config);
+			expect(result.audit.dbPath).toBe("/tmp/guard.db");
+			expect(result.audit.retentionHours).toBe(48);
+		});
+
+		it("allows disabling audit persistence", () => {
+			const config = { ...validStdioConfig, audit: { dbPath: false } };
+			const result = guardConfigSchema.parse(config);
+			expect(result.audit.dbPath).toBe(false);
 		});
 
 		it("parses HTTP listen config", () => {

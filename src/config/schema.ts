@@ -52,6 +52,17 @@ const toolRuleSchema = z.object({
 	readOnly: z.boolean().optional(),
 });
 
+// --- Audit configuration ---
+
+const auditSchema = z
+	.object({
+		/** Path to SQLite database file. Set to false to disable persistence. */
+		dbPath: z.union([z.string(), z.literal(false)]).default("~/.mcp-guard/guard.db"),
+		/** Rolling window for audit event retention in hours. */
+		retentionHours: z.number().int().min(1).default(24),
+	})
+	.default({});
+
 // --- Full guard config ---
 
 export const guardConfigSchema = z.object({
@@ -72,6 +83,9 @@ export const guardConfigSchema = z.object({
 		rules: z.array(toolRuleSchema).default([]),
 	}),
 
+	/** Audit and persistence configuration. */
+	audit: auditSchema,
+
 	/** Logging level. */
 	logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
@@ -83,4 +97,5 @@ export type ServerConfig = z.infer<typeof serverSchema>;
 export type StdioServerConfig = z.infer<typeof stdioServerSchema>;
 export type HttpServerConfig = z.infer<typeof httpServerSchema>;
 export type ListenConfig = z.infer<typeof listenSchema>;
+export type AuditConfig = z.infer<typeof auditSchema>;
 export type ToolRule = z.infer<typeof toolRuleSchema>;

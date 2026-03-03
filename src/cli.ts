@@ -57,13 +57,27 @@ async function main(): Promise<void> {
 
 	const proxy = createProxy(config, logger);
 
-	// Graceful shutdown on signals
+	// Prevent multiple shutdown calls
+	let shuttingDown = false;
 	const shutdown = async (): Promise<void> => {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		logger.info({}, "Shutdown signal received");
 		await proxy.close();
 		process.exit(0);
 	};
+
+	// Graceful shutdown on signals
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
+
+	// Detect client disconnect (stdin EOF) — triggers shutdown for stdio transport
+	if (config.listen.transport === "stdio") {
+		process.stdin.on("end", () => {
+			logger.info({}, "Client disconnected (stdin EOF)");
+			shutdown();
+		});
+	}
 
 	await proxy.start();
 }

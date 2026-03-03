@@ -46,5 +46,10 @@ policy:
     - tool: "write_file"
       allow: false
 
+# Audit and persistence
+audit:
+  dbPath: ~/.mcp-guard/guard.db  # SQLite path (set to false to disable)
+  retentionHours: 24             # Rolling window for audit events
+
 # Log level: debug | info | warn | error
 logLevel: info
