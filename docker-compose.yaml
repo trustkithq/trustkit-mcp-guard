@@ -1,0 +1,16 @@
+# docker-compose.yaml — local development and testing
+#
+# Usage:
+#   docker compose build
+#   docker compose run --rm mcp-guard
+#
+# The guard reads config from ./examples/ and stores audit data in ./data/
+
+services:
+  mcp-guard:
+    build: .
+    stdin_open: true
+    volumes:
+      - ./examples:/etc/mcp-guard:ro
+      - ./data:/data
+    command: ["--config", "/etc/mcp-guard/basic-config.yaml"]

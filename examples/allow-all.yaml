@@ -1,0 +1,26 @@
+# MCP Guard — audit-only (allow-all) configuration
+#
+# Allows all tool calls but logs every invocation.
+# Use this to monitor what tools an AI agent calls
+# before writing restrictive policy rules.
+version: 1
+
+listen:
+  transport: stdio
+
+servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+policy:
+  # Allow everything — this is an audit-only setup
+  defaultAction: allow
+  rules: []
+
+audit:
+  dbPath: ~/.mcp-guard/guard.db
+  retentionHours: 72  # 3 days
+
+logLevel: info

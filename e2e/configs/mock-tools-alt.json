@@ -1,0 +1,14 @@
+{
+	"tools": [
+		{
+			"name": "list_branches",
+			"description": "List git branches",
+			"response": { "content": [{ "type": "text", "text": "main, develop" }] }
+		},
+		{
+			"name": "get_diff",
+			"description": "Get git diff",
+			"response": { "content": [{ "type": "text", "text": "+added line" }] }
+		}
+	]
+}

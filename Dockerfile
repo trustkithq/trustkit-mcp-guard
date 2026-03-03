@@ -20,4 +20,11 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/dist dist/
 
+# Default config + data volume mount points
+VOLUME ["/etc/mcp-guard", "/data"]
+
+# Default config path (override with --config)
+ENV MCP_GUARD_CONFIG=/etc/mcp-guard/guard.yaml
+
 ENTRYPOINT ["node", "dist/cli.js"]
+CMD ["--config", "/etc/mcp-guard/guard.yaml"]

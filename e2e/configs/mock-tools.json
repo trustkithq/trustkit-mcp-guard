@@ -1,0 +1,29 @@
+{
+	"tools": [
+		{
+			"name": "read_file",
+			"description": "Read a file from disk",
+			"response": { "content": [{ "type": "text", "text": "file contents here" }] }
+		},
+		{
+			"name": "write_file",
+			"description": "Write a file to disk",
+			"response": { "content": [{ "type": "text", "text": "written" }] }
+		},
+		{
+			"name": "search_files",
+			"description": "Search files by pattern",
+			"response": { "content": [{ "type": "text", "text": "found 3 results" }] }
+		},
+		{
+			"name": "github_get_repo",
+			"description": "Get GitHub repo info",
+			"response": { "content": [{ "type": "text", "text": "{\"name\": \"mcp-guard\"}" }] }
+		},
+		{
+			"name": "github_create_issue",
+			"description": "Create a GitHub issue",
+			"response": { "content": [{ "type": "text", "text": "created issue #42" }] }
+		}
+	]
+}

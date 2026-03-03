@@ -1,0 +1,66 @@
+# MCP Guard — multi-upstream configuration example
+#
+# Proxy sits in front of two MCP servers:
+#   1. Filesystem server (read-only)
+#   2. GitHub server (selective access)
+version: 1
+
+listen:
+  transport: stdio
+
+servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+  - name: github
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
+
+policy:
+  defaultAction: deny
+
+  rules:
+    # Filesystem: read-only access
+    - tool: "read_file"
+      allow: true
+
+    - tool: "search_files"
+      allow: true
+
+    - tool: "list_directory"
+      allow: true
+
+    # Block all filesystem writes
+    - tool: "write_file"
+      allow: false
+
+    # GitHub: read operations only
+    - tool: "github_get_*"
+      allow: true
+
+    - tool: "github_list_*"
+      allow: true
+
+    - tool: "github_search_*"
+      allow: true
+
+    # Block GitHub mutations
+    - tool: "github_create_*"
+      allow: false
+
+    - tool: "github_update_*"
+      allow: false
+
+    - tool: "github_delete_*"
+      allow: false
+
+audit:
+  dbPath: ~/.mcp-guard/guard.db
+  retentionHours: 168  # 7 days
+
+logLevel: info
