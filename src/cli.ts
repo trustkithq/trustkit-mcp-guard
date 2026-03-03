@@ -10,6 +10,7 @@ import { parseArgs } from "node:util";
 import { loadConfig } from "./config/loader.js";
 import { AppError } from "./errors/base.js";
 import { createLogger } from "./logger/index.js";
+import { createProxy } from "./proxy/index.js";
 
 const { values } = parseArgs({
 	options: {
@@ -39,7 +40,7 @@ Options:
 	process.exit(0);
 }
 
-try {
+async function main(): Promise<void> {
 	const config = loadConfig(values.config as string);
 	const logger = createLogger({ level: config.logLevel });
 
@@ -54,9 +55,20 @@ try {
 		"Config loaded",
 	);
 
-	// TODO: initialize proxy with config
-	logger.info({}, "MCP Guard proxy is not yet implemented. Coming soon.");
-} catch (error: unknown) {
+	const proxy = createProxy(config, logger);
+
+	// Graceful shutdown on signals
+	const shutdown = async (): Promise<void> => {
+		await proxy.close();
+		process.exit(0);
+	};
+	process.on("SIGINT", shutdown);
+	process.on("SIGTERM", shutdown);
+
+	await proxy.start();
+}
+
+main().catch((error: unknown) => {
 	if (error instanceof AppError) {
 		process.stderr.write(`Error: ${error.message}\n`);
 		process.exit(1);
@@ -67,4 +79,4 @@ try {
 	}
 	process.stderr.write(`Unexpected error: ${String(error)}\n`);
 	process.exit(1);
-}
+});

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { PolicyEngine } from "../policy/engine.js";
-import type { PolicyConfig } from "../policy/schema.js";
+import { PolicyEngine, type PolicyInput } from "../policy/engine.js";
 
-const config: PolicyConfig = {
-	version: 1,
+const config: PolicyInput = {
 	defaultAction: "deny",
 	rules: [
 		{ tool: "read_file", allow: true },
@@ -40,7 +38,6 @@ describe("PolicyEngine", () => {
 
 	it("allows unmatched tools when defaultAction is allow", () => {
 		const permissive = new PolicyEngine({
-			version: 1,
 			defaultAction: "allow",
 			rules: [{ tool: "dangerous_tool", allow: false }],
 		});

@@ -1,4 +1,10 @@
-import type { PolicyConfig, ToolRule } from "./schema.js";
+import type { ToolRule } from "./schema.js";
+
+/** Input shape for PolicyEngine — matches GuardConfig.policy. */
+export interface PolicyInput {
+	defaultAction: "allow" | "deny";
+	rules: readonly ToolRule[];
+}
 
 export interface PolicyDecision {
 	allowed: boolean;
@@ -11,9 +17,9 @@ export interface PolicyDecision {
  * First matching rule wins. Falls back to defaultAction if no rule matches.
  */
 export class PolicyEngine {
-	private readonly config: PolicyConfig;
+	private readonly config: PolicyInput;
 
-	constructor(config: PolicyConfig) {
+	constructor(config: PolicyInput) {
 		this.config = config;
 	}
 
