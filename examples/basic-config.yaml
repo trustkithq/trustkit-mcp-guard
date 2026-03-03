@@ -1,26 +1,50 @@
-# MCP Guard — basic policy configuration example
+# MCP Guard — basic configuration example
 version: 1
 
-# Deny by default — only explicitly allowed tools can be called
-defaultAction: deny
+# Agent-facing transport (how the AI client connects to mcp-guard)
+listen:
+  transport: stdio  # "stdio" (default) or "http"
+  # port: 31415     # Only used when transport is "http"
+  # host: 0.0.0.0   # Only used when transport is "http"
 
-rules:
-  # Allow all read_* tools
-  - tool: "read_*"
-    allow: true
+# Upstream MCP servers to proxy
+servers:
+  # Local MCP server spawned as a child process
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
 
-  # Allow search
-  - tool: "search_files"
-    allow: true
+  # Remote MCP server via HTTP
+  # - name: slack
+  #   transport: http
+  #   url: http://localhost:4000/mcp
 
-  # Allow GitHub read operations
-  - tool: "github_get_*"
-    allow: true
+# Policy rules
+policy:
+  # Deny by default — only explicitly allowed tools can be called
+  defaultAction: deny
 
-  # Block GitHub write operations
-  - tool: "github_create_*"
-    allow: false
+  rules:
+    # Allow all read_* tools
+    - tool: "read_*"
+      allow: true
 
-  # Block all filesystem writes
-  - tool: "write_file"
-    allow: false
+    # Allow search
+    - tool: "search_files"
+      allow: true
+
+    # Allow GitHub read operations
+    - tool: "github_get_*"
+      allow: true
+
+    # Block GitHub write operations
+    - tool: "github_create_*"
+      allow: false
+
+    # Block all filesystem writes
+    - tool: "write_file"
+      allow: false
+
+# Log level: debug | info | warn | error
+logLevel: info
