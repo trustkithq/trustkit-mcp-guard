@@ -5,3 +5,5 @@ dist/
 .env.*
 .claude/
 CLAUDE.md
+.data
+data

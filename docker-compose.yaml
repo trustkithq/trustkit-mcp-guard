@@ -7,14 +7,14 @@
 #   HTTP mode:    docker compose up mcp-guard-http
 
 services:
-  # Stdio mode — AI client spawns guard as a child process
-  mcp-guard:
-    build: .
-    stdin_open: true
-    volumes:
-      - ./examples:/etc/mcp-guard:ro
-      - ./.data:/data
-    command: ["--config", "/etc/mcp-guard/basic-config.yaml"]
+#  # Stdio mode — AI client spawns guard as a child process
+#  mcp-guard:
+#    build: .
+#    stdin_open: true
+#    volumes:
+#      - ./examples:/etc/mcp-guard:ro
+#      - ./.data:/data
+#    command: ["--config", "/etc/mcp-guard/basic-config.yaml"]
 
   # HTTP mode — guard listens on port 31415, AI client connects via URL
   mcp-guard-http:

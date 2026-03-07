@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type Server as HttpServer } from "node:http";
+import { type Server as HttpServer, createServer } from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
 	CallToolRequestSchema,
 	ErrorCode,
@@ -252,9 +252,13 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 	}
 
 	function startHttpServer(): Promise<void> {
+		const srv = httpServer;
+		if (!srv) {
+			return Promise.resolve();
+		}
 		const { port, host } = config.listen;
 		return new Promise((resolve, reject) => {
-			httpServer!.once("error", (err: NodeJS.ErrnoException) => {
+			srv.once("error", (err: NodeJS.ErrnoException) => {
 				reject(
 					new NetworkError(`Failed to start HTTP server: ${err.message}`, {
 						retryable: false,
@@ -263,8 +267,11 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 					}),
 				);
 			});
-			httpServer!.listen(port, host, () => {
-				log.info({ host, port, endpoint: `http://${host}:${port}/mcp` }, "HTTP transport listening");
+			srv.listen(port, host, () => {
+				log.info(
+					{ host, port, endpoint: `http://${host}:${port}/mcp` },
+					"HTTP transport listening",
+				);
 				resolve();
 			});
 		});
@@ -280,8 +287,9 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 				clearInterval(cleanupInterval);
 			}
 			if (httpServer) {
+				const srv = httpServer;
 				await new Promise<void>((resolve, reject) => {
-					httpServer!.close((err) => (err ? reject(err) : resolve()));
+					srv.close((err) => (err ? reject(err) : resolve()));
 				});
 			}
 			if (server) {
