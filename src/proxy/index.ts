@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { createServer, type Server as HttpServer } from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
 	CallToolRequestSchema,
@@ -39,6 +42,7 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 	let server: Server | undefined;
 	let persistence: Persistence | null = null;
 	let cleanupInterval: ReturnType<typeof setInterval> | undefined;
+	let httpServer: HttpServer | undefined;
 
 	async function start(): Promise<void> {
 		// 0. Initialize persistence (SQLite)
@@ -82,6 +86,11 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		// 7. Connect agent-facing transport
 		const transport = createAgentTransport();
 		await server.connect(transport);
+
+		// 8. Start HTTP server if applicable (after transport is connected)
+		if (httpServer) {
+			await startHttpServer();
+		}
 
 		log.info(
 			{ toolCount: router.size, upstreams: upstreams.map((u) => u.name) },
@@ -218,15 +227,47 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		log.warn({ upstream: upstream.name, reason }, "Upstream marked as down");
 	}
 
-	function createAgentTransport(): StdioServerTransport {
-		if (config.listen.transport !== "stdio") {
-			// HTTP transport support deferred to Phase 2
-			throw new NetworkError(
-				`Unsupported listen transport: "${config.listen.transport}". Only "stdio" is supported in this version.`,
-				{ retryable: false, context: { transport: config.listen.transport } },
-			);
+	function createAgentTransport(): StdioServerTransport | StreamableHTTPServerTransport {
+		if (config.listen.transport === "stdio") {
+			return new StdioServerTransport();
 		}
-		return new StdioServerTransport();
+
+		const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
+
+		httpServer = createServer(async (req, res) => {
+			const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+			if (url.pathname === "/mcp") {
+				await transport.handleRequest(req, res);
+				return;
+			}
+			if (url.pathname === "/health" && req.method === "GET") {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ status: "ok" }));
+				return;
+			}
+			res.writeHead(404, { "Content-Type": "text/plain" }).end("Not Found");
+		});
+
+		return transport;
+	}
+
+	function startHttpServer(): Promise<void> {
+		const { port, host } = config.listen;
+		return new Promise((resolve, reject) => {
+			httpServer!.once("error", (err: NodeJS.ErrnoException) => {
+				reject(
+					new NetworkError(`Failed to start HTTP server: ${err.message}`, {
+						retryable: false,
+						context: { host, port, code: err.code },
+						cause: err,
+					}),
+				);
+			});
+			httpServer!.listen(port, host, () => {
+				log.info({ host, port, endpoint: `http://${host}:${port}/mcp` }, "HTTP transport listening");
+				resolve();
+			});
+		});
 	}
 
 	async function close(): Promise<void> {
@@ -237,6 +278,11 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		const cleanup = async (): Promise<void> => {
 			if (cleanupInterval) {
 				clearInterval(cleanupInterval);
+			}
+			if (httpServer) {
+				await new Promise<void>((resolve, reject) => {
+					httpServer!.close((err) => (err ? reject(err) : resolve()));
+				});
 			}
 			if (server) {
 				await server.close();

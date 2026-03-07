@@ -1,0 +1,41 @@
+# Local testing config — wraps the filesystem MCP server
+version: 1
+
+listen:
+  transport: stdio
+
+servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+policy:
+  defaultAction: deny
+
+  rules:
+    # Allow reads
+    - tool: "read_file"
+      allow: true
+    - tool: "read_multiple_files"
+      allow: true
+    - tool: "list_directory"
+      allow: true
+    - tool: "search_files"
+      allow: true
+    - tool: "get_file_info"
+      allow: true
+    - tool: "list_allowed_directories"
+      allow: true
+
+    # Block writes
+    - tool: "write_file"
+      allow: false
+    - tool: "create_directory"
+      allow: false
+    - tool: "move_file"
+      allow: false
+
+audit:
+  dbPath: false
+logLevel: info

@@ -26,5 +26,8 @@ VOLUME ["/etc/mcp-guard", "/data"]
 # Default config path (override with --config)
 ENV MCP_GUARD_CONFIG=/etc/mcp-guard/guard.yaml
 
+# HTTP transport default port
+EXPOSE 31415
+
 ENTRYPOINT ["node", "dist/cli.js"]
 CMD ["--config", "/etc/mcp-guard/guard.yaml"]

@@ -1,0 +1,47 @@
+# MCP Guard — HTTP transport example (Guard-Light mode)
+#
+# The guard listens on HTTP instead of stdio, so AI clients
+# (Claude Desktop, Claude Code, etc.) connect via URL.
+#
+# Claude Code MCP config (~/.claude/settings.json):
+#   {
+#     "mcpServers": {
+#       "mcp-guard": {
+#         "type": "url",
+#         "url": "http://localhost:31415/mcp"
+#       }
+#     }
+#   }
+
+version: 1
+
+listen:
+  transport: http
+  port: 31415
+  host: 0.0.0.0
+
+# Upstream MCP servers to proxy
+servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data/project"]
+
+policy:
+  defaultAction: deny
+
+  rules:
+    - tool: "read_*"
+      allow: true
+    - tool: "search_files"
+      allow: true
+    - tool: "list_*"
+      allow: true
+    - tool: "write_file"
+      allow: false
+
+audit:
+  dbPath: /data/guard.db
+  retentionHours: 24
+
+logLevel: info

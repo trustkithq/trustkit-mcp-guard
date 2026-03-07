@@ -1,16 +1,28 @@
-# docker-compose.yaml — local development and testing
+# docker-compose.yaml — local development (builds from source)
 #
 # Usage:
 #   docker compose build
-#   docker compose run --rm mcp-guard
 #
-# The guard reads config from ./examples/ and stores audit data in ./data/
+#   Stdio mode:   docker compose run --rm mcp-guard
+#   HTTP mode:    docker compose up mcp-guard-http
 
 services:
+  # Stdio mode — AI client spawns guard as a child process
   mcp-guard:
     build: .
     stdin_open: true
     volumes:
       - ./examples:/etc/mcp-guard:ro
-      - ./data:/data
+      - ./.data:/data
     command: ["--config", "/etc/mcp-guard/basic-config.yaml"]
+
+  # HTTP mode — guard listens on port 31415, AI client connects via URL
+  mcp-guard-http:
+    build: .
+    ports:
+      - "31415:31415"
+    volumes:
+      - ./examples:/etc/mcp-guard:ro
+      - ./.data:/data
+      - ./:/data/project:ro
+    command: ["--config", "/etc/mcp-guard/http-config.yaml"]

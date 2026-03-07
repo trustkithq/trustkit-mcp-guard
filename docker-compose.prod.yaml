@@ -1,0 +1,18 @@
+# docker-compose.prod.yaml — production (pre-built image from GHCR)
+#
+# Uses the published image instead of building from source.
+# Adjust volume paths to point at your own config and project directories.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yaml up
+
+services:
+  mcp-guard:
+    image: ghcr.io/trustkithq/mcp-guard:latest
+    ports:
+      - "31415:31415"
+    volumes:
+      - ./guard-config:/etc/mcp-guard:ro
+      - ./guard-data:/data
+      - ./my-project:/data/project:ro
+    command: ["--config", "/etc/mcp-guard/guard.yaml"]
