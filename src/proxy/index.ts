@@ -27,6 +27,11 @@ export interface McpGuardProxy {
 	close(): Promise<void>;
 }
 
+interface HttpSession {
+	transport: StreamableHTTPServerTransport;
+	server: Server;
+}
+
 /**
  * Creates the MCP Guard proxy.
  * The proxy acts as a full MCP server to the AI client and a full MCP client
@@ -43,6 +48,7 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 	let persistence: Persistence | null = null;
 	let cleanupInterval: ReturnType<typeof setInterval> | undefined;
 	let httpServer: HttpServer | undefined;
+	const sessions = new Map<string, HttpSession>();
 
 	async function start(): Promise<void> {
 		// 0. Initialize persistence (SQLite)
@@ -67,28 +73,16 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			}
 		}
 
-		// 3. Create agent-facing MCP server
-		server = new Server({ name: "mcp-guard", version: "0.1.0" }, { capabilities: { tools: {} } });
-
-		// 4. Register tools/list handler — returns aggregated tool list
-		server.setRequestHandler(ListToolsRequestSchema, async () => {
-			return { tools: router.allTools() };
-		});
-
-		// 5. Register tools/call handler — policy → audit → forward or reject
-		server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-			return handleToolCall(request.params, extra.requestId);
-		});
-
-		// 6. Set up notification forwarding for tools/list_changed
+		// 3. Set up notification forwarding for tools/list_changed
 		setupToolListRefresh();
 
-		// 7. Connect agent-facing transport
-		const transport = createAgentTransport();
-		await server.connect(transport);
-
-		// 8. Start HTTP server if applicable (after transport is connected)
-		if (httpServer) {
+		// 4. Connect agent-facing transport
+		if (config.listen.transport === "stdio") {
+			server = createMcpServer();
+			const transport = new StdioServerTransport();
+			await server.connect(transport);
+		} else {
+			setupHttpServer();
 			await startHttpServer();
 		}
 
@@ -96,6 +90,21 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			{ toolCount: router.size, upstreams: upstreams.map((u) => u.name) },
 			"MCP Guard proxy started",
 		);
+	}
+
+	/** Creates an MCP Server with tools/list and tools/call handlers wired to shared state. */
+	function createMcpServer(): Server {
+		const s = new Server({ name: "mcp-guard", version: "0.1.0" }, { capabilities: { tools: {} } });
+
+		s.setRequestHandler(ListToolsRequestSchema, async () => {
+			return { tools: router.allTools() };
+		});
+
+		s.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+			return handleToolCall(request.params, extra.requestId);
+		});
+
+		return s;
 	}
 
 	async function handleToolCall(
@@ -227,26 +236,22 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		log.warn({ upstream: upstream.name, reason }, "Upstream marked as down");
 	}
 
-	function createAgentTransport(): StdioServerTransport | StreamableHTTPServerTransport {
-		if (config.listen.transport === "stdio") {
-			return new StdioServerTransport();
-		}
-
-		const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
-
+	/**
+	 * Sets up the HTTP server with per-session transport management.
+	 * Each client connection gets its own StreamableHTTPServerTransport + MCP Server pair.
+	 */
+	function setupHttpServer(): void {
 		httpServer = createServer(async (req, res) => {
 			const method = req.method ?? "UNKNOWN";
 			const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
 			const startTime = performance.now();
+			const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-			log.debug(
-				{ method, path: url.pathname, sessionId: req.headers["mcp-session-id"] },
-				"HTTP request received",
-			);
+			log.debug({ method, path: url.pathname, sessionId }, "HTTP request received");
 
 			if (url.pathname === "/mcp") {
 				try {
-					await transport.handleRequest(req, res);
+					await handleMcpRequest(req, res, method, sessionId);
 					log.debug(
 						{
 							method,
@@ -281,8 +286,55 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			log.debug({ method, path: url.pathname }, "HTTP 404 — unknown path");
 			res.writeHead(404, { "Content-Type": "text/plain" }).end("Not Found");
 		});
+	}
 
-		return transport;
+	async function handleMcpRequest(
+		req: import("node:http").IncomingMessage,
+		res: import("node:http").ServerResponse,
+		method: string,
+		sessionId: string | undefined,
+	): Promise<void> {
+		// Existing session — forward to its transport
+		if (sessionId) {
+			const session = sessions.get(sessionId);
+			if (!session) {
+				log.warn({ sessionId }, "Request for unknown session");
+				res.writeHead(400, { "Content-Type": "text/plain" }).end("Unknown session");
+				return;
+			}
+			await session.transport.handleRequest(req, res);
+			if (method === "DELETE") {
+				log.debug({ sessionId }, "Session closed by client");
+				sessions.delete(sessionId);
+				await session.server.close();
+			}
+			return;
+		}
+
+		// New session — only POST can initialize
+		if (method !== "POST") {
+			res.writeHead(400, { "Content-Type": "text/plain" }).end("Missing session ID");
+			return;
+		}
+
+		const transport = new StreamableHTTPServerTransport({
+			sessionIdGenerator: () => randomUUID(),
+		});
+		const sessionServer = createMcpServer();
+		await sessionServer.connect(transport);
+
+		await transport.handleRequest(req, res);
+
+		const newSessionId = transport.sessionId;
+		if (newSessionId) {
+			sessions.set(newSessionId, { transport, server: sessionServer });
+			log.debug({ sessionId: newSessionId }, "New session created");
+
+			transport.onclose = () => {
+				log.debug({ sessionId: newSessionId }, "Session transport closed");
+				sessions.delete(newSessionId);
+			};
+		}
 	}
 
 	function startHttpServer(): Promise<void> {
@@ -320,6 +372,12 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			if (cleanupInterval) {
 				clearInterval(cleanupInterval);
 			}
+			// Close all HTTP sessions
+			for (const [id, session] of sessions) {
+				log.debug({ sessionId: id }, "Closing session on shutdown");
+				await session.server.close();
+			}
+			sessions.clear();
 			if (httpServer) {
 				const srv = httpServer;
 				await new Promise<void>((resolve, reject) => {
