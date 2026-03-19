@@ -235,16 +235,50 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
 
 		httpServer = createServer(async (req, res) => {
+			const method = req.method ?? "UNKNOWN";
 			const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+			const startTime = performance.now();
+
+			log.debug(
+				{ method, path: url.pathname, sessionId: req.headers["mcp-session-id"] },
+				"HTTP request received",
+			);
+
 			if (url.pathname === "/mcp") {
-				await transport.handleRequest(req, res);
+				try {
+					await transport.handleRequest(req, res);
+					log.debug(
+						{
+							method,
+							path: url.pathname,
+							status: res.statusCode,
+							durationMs: Math.round(performance.now() - startTime),
+						},
+						"HTTP request completed",
+					);
+				} catch (error: unknown) {
+					const err = toError(error);
+					log.error(
+						{
+							method,
+							path: url.pathname,
+							error: err.message,
+							durationMs: Math.round(performance.now() - startTime),
+						},
+						"HTTP request failed",
+					);
+					if (!res.headersSent) {
+						res.writeHead(500, { "Content-Type": "text/plain" }).end("Internal Server Error");
+					}
+				}
 				return;
 			}
-			if (url.pathname === "/health" && req.method === "GET") {
+			if (url.pathname === "/health" && method === "GET") {
 				res.writeHead(200, { "Content-Type": "application/json" });
 				res.end(JSON.stringify({ status: "ok" }));
 				return;
 			}
+			log.debug({ method, path: url.pathname }, "HTTP 404 — unknown path");
 			res.writeHead(404, { "Content-Type": "text/plain" }).end("Not Found");
 		});
 

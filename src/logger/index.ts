@@ -64,6 +64,7 @@ export function createLogger(options?: { level?: string }): Logger {
 		{
 			level,
 			transport: undefined,
+			timestamp: pino.stdTimeFunctions.isoTime,
 			// Write to stderr — stdout is the MCP JSON-RPC channel
 		},
 		pino.destination({ dest: 2, sync: false }),
