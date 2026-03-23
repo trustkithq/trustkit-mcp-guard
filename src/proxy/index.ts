@@ -250,8 +250,9 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			log.debug({ method, path: url.pathname, sessionId }, "HTTP request received");
 
 			if (url.pathname === "/mcp" || url.pathname === "/sse") {
+				const stateless = url.pathname === "/sse";
 				try {
-					await handleMcpRequest(req, res, method, sessionId);
+					await handleMcpRequest(req, res, method, sessionId, stateless);
 					log.debug(
 						{
 							method,
@@ -293,7 +294,26 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		res: import("node:http").ServerResponse,
 		method: string,
 		sessionId: string | undefined,
+		stateless: boolean,
 	): Promise<void> {
+		// Stateless mode (/sse): each POST is self-contained, no session tracking.
+		// This avoids SSE GET stream lifecycle issues with clients like OpenWebUI.
+		if (stateless) {
+			if (method !== "POST") {
+				res.writeHead(405, { "Content-Type": "text/plain" }).end("Method Not Allowed");
+				return;
+			}
+			const transport = new StreamableHTTPServerTransport({
+				sessionIdGenerator: undefined,
+			});
+			const sessionServer = createMcpServer();
+			await sessionServer.connect(transport);
+			await transport.handleRequest(req, res);
+			return;
+		}
+
+		// Stateful mode (/mcp): full session management with GET SSE streams.
+
 		// Existing session — forward to its transport
 		if (sessionId) {
 			const session = sessions.get(sessionId);
