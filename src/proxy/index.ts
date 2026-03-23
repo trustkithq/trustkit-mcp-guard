@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type Server as HttpServer, createServer } from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -28,7 +29,7 @@ export interface McpGuardProxy {
 }
 
 interface HttpSession {
-	transport: StreamableHTTPServerTransport;
+	transport: StreamableHTTPServerTransport | SSEServerTransport;
 	server: Server;
 }
 
@@ -278,6 +279,56 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 				}
 				return;
 			}
+			// Legacy SSE transport: GET /sse opens event stream
+			if (url.pathname === "/sse" && method === "GET") {
+				try {
+					await handleSseConnect(req, res);
+					log.debug(
+						{ method, path: url.pathname, durationMs: Math.round(performance.now() - startTime) },
+						"SSE connection established",
+					);
+				} catch (error: unknown) {
+					const err = toError(error);
+					log.error({ error: err.message }, "SSE connection failed");
+					if (!res.headersSent) {
+						res.writeHead(500, { "Content-Type": "text/plain" }).end("Internal Server Error");
+					}
+				}
+				return;
+			}
+			// Legacy SSE transport: POST /messages sends JSON-RPC messages
+			if (url.pathname === "/messages" && method === "POST") {
+				try {
+					const legacySessionId = url.searchParams.get("sessionId");
+					if (!legacySessionId) {
+						res.writeHead(400, { "Content-Type": "text/plain" }).end("Missing sessionId");
+						return;
+					}
+					const session = sessions.get(legacySessionId);
+					if (!session || !(session.transport instanceof SSEServerTransport)) {
+						res.writeHead(400, { "Content-Type": "text/plain" }).end("Unknown session");
+						return;
+					}
+					await session.transport.handlePostMessage(req, res);
+					log.debug(
+						{
+							method,
+							path: url.pathname,
+							sessionId: legacySessionId,
+							status: res.statusCode,
+							durationMs: Math.round(performance.now() - startTime),
+						},
+						"SSE message handled",
+					);
+				} catch (error: unknown) {
+					const err = toError(error);
+					log.error({ error: err.message }, "SSE message handling failed");
+					if (!res.headersSent) {
+						res.writeHead(500, { "Content-Type": "text/plain" }).end("Internal Server Error");
+					}
+				}
+				return;
+			}
 			if (url.pathname === "/health" && method === "GET") {
 				res.writeHead(200, { "Content-Type": "application/json" });
 				res.end(JSON.stringify({ status: "ok" }));
@@ -300,6 +351,12 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			if (!session) {
 				log.warn({ sessionId }, "Request for unknown session");
 				res.writeHead(400, { "Content-Type": "text/plain" }).end("Unknown session");
+				return;
+			}
+			if (!(session.transport instanceof StreamableHTTPServerTransport)) {
+				res
+					.writeHead(400, { "Content-Type": "text/plain" })
+					.end("Session uses a different transport");
 				return;
 			}
 			await session.transport.handleRequest(req, res);
@@ -335,6 +392,26 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 				sessions.delete(newSessionId);
 			};
 		}
+	}
+
+	/** Legacy SSE: GET /sse opens an SSE stream, POST /messages?sessionId=<id> sends messages. */
+	async function handleSseConnect(
+		_req: import("node:http").IncomingMessage,
+		res: import("node:http").ServerResponse,
+	): Promise<void> {
+		const transport = new SSEServerTransport("/messages", res);
+		const sseSessionId = transport.sessionId;
+		const sessionServer = createMcpServer();
+
+		sessions.set(sseSessionId, { transport, server: sessionServer });
+		log.debug({ sessionId: sseSessionId }, "Legacy SSE session created");
+
+		res.on("close", () => {
+			log.debug({ sessionId: sseSessionId }, "Legacy SSE session closed");
+			sessions.delete(sseSessionId);
+		});
+
+		await sessionServer.connect(transport);
 	}
 
 	function startHttpServer(): Promise<void> {
