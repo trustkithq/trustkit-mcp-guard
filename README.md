@@ -99,6 +99,16 @@ docker compose run --rm mcp-guard   # stdio mode
 
 The guard listens on a port (default `31415`) and AI clients connect via URL. Use this when you want a long-running guard process, persistent audit data, or read-only project access.
 
+The HTTP server exposes multiple endpoints to support different MCP transport protocols:
+
+| Endpoint | Transport | Use case |
+|----------|-----------|----------|
+| `/mcp` | Streamable HTTP (stateful, MCP spec 2025-03-26) | Modern clients (Cursor, Codex, recent Claude Code) |
+| `/sse` | Streamable HTTP (stateless) | OpenWebUI's "sse" connection type |
+| `/sse-legacy` + `/messages` | Legacy SSE (MCP spec 2024-11-05) | Older clients that haven't migrated to Streamable HTTP |
+
+Pick the endpoint that matches your client. `/mcp` is the recommended default.
+
 **Claude Code** (`~/.claude/settings.json`):
 
 ```json
