@@ -1,6 +1,6 @@
 {
 	"name": "@trustkit/mcp-guard",
-	"version": "0.1.4",
+	"version": "0.1.5",
 	"description": "AI execution firewall for MCP-based tools",
 	"type": "module",
 	"license": "Apache-2.0",

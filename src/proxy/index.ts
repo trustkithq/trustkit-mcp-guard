@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type Server as HttpServer, createServer } from "node:http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -32,6 +33,16 @@ interface HttpSession {
 	server: Server;
 }
 
+interface SseSession {
+	transport: SSEServerTransport;
+	server: Server;
+}
+
+/** Path for the legacy SSE event stream (GET). Per old MCP spec. */
+const LEGACY_SSE_PATH = "/sse-legacy";
+/** Path for legacy SSE client→server messages (POST). Per old MCP spec. */
+const LEGACY_MESSAGES_PATH = "/messages";
+
 /**
  * Creates the MCP Guard proxy.
  * The proxy acts as a full MCP server to the AI client and a full MCP client
@@ -49,6 +60,11 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 	let cleanupInterval: ReturnType<typeof setInterval> | undefined;
 	let httpServer: HttpServer | undefined;
 	const sessions = new Map<string, HttpSession>();
+	/**
+	 * Active legacy SSE sessions, keyed by sessionId from SSEServerTransport.
+	 * Used to route POST /messages requests to the correct event stream.
+	 */
+	const sseSessions = new Map<string, SseSession>();
 
 	async function start(): Promise<void> {
 		// 0. Initialize persistence (SQLite)
@@ -279,6 +295,35 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 				}
 				return;
 			}
+			if (url.pathname === LEGACY_SSE_PATH || url.pathname === LEGACY_MESSAGES_PATH) {
+				try {
+					await handleLegacySseRequest(req, res, method, url);
+					log.debug(
+						{
+							method,
+							path: url.pathname,
+							status: res.statusCode,
+							durationMs: Math.round(performance.now() - startTime),
+						},
+						"Legacy SSE request completed",
+					);
+				} catch (error: unknown) {
+					const err = toError(error);
+					log.error(
+						{
+							method,
+							path: url.pathname,
+							error: err.message,
+							durationMs: Math.round(performance.now() - startTime),
+						},
+						"Legacy SSE request failed",
+					);
+					if (!res.headersSent) {
+						res.writeHead(500, { "Content-Type": "text/plain" }).end("Internal Server Error");
+					}
+				}
+				return;
+			}
 			if (url.pathname === "/health" && method === "GET") {
 				res.writeHead(200, { "Content-Type": "application/json" });
 				res.end(JSON.stringify({ status: "ok" }));
@@ -357,6 +402,63 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		}
 	}
 
+	/**
+	 * Handles the legacy SSE transport (MCP spec 2024-11-05).
+	 *
+	 * Flow:
+	 *   GET  /sse-legacy  → opens long-lived SSE event stream, server emits an
+	 *                       `endpoint` event pointing to /messages?sessionId=...
+	 *   POST /messages    → client sends JSON-RPC messages, routed by sessionId
+	 *
+	 * Used by clients that haven't migrated to Streamable HTTP yet (e.g. older
+	 * Claude Code versions). Coexists with /mcp and /sse (Streamable HTTP).
+	 */
+	async function handleLegacySseRequest(
+		req: import("node:http").IncomingMessage,
+		res: import("node:http").ServerResponse,
+		method: string,
+		url: URL,
+	): Promise<void> {
+		// GET /sse-legacy → start a new SSE event stream
+		if (url.pathname === LEGACY_SSE_PATH) {
+			if (method !== "GET") {
+				res.writeHead(405, { "Content-Type": "text/plain" }).end("Method Not Allowed");
+				return;
+			}
+			const transport = new SSEServerTransport(LEGACY_MESSAGES_PATH, res);
+			const sessionServer = createMcpServer();
+			await sessionServer.connect(transport);
+			const id = transport.sessionId;
+			sseSessions.set(id, { transport, server: sessionServer });
+			log.debug({ sessionId: id }, "Legacy SSE session opened");
+
+			transport.onclose = () => {
+				log.debug({ sessionId: id }, "Legacy SSE session closed");
+				sseSessions.delete(id);
+				void sessionServer.close();
+			};
+			return;
+		}
+
+		// POST /messages?sessionId=... → route to existing SSE session's transport
+		if (method !== "POST") {
+			res.writeHead(405, { "Content-Type": "text/plain" }).end("Method Not Allowed");
+			return;
+		}
+		const sessionId = url.searchParams.get("sessionId");
+		if (!sessionId) {
+			res.writeHead(400, { "Content-Type": "text/plain" }).end("Missing sessionId");
+			return;
+		}
+		const session = sseSessions.get(sessionId);
+		if (!session) {
+			log.warn({ sessionId }, "POST /messages for unknown SSE session");
+			res.writeHead(404, { "Content-Type": "text/plain" }).end("Unknown session");
+			return;
+		}
+		await session.transport.handlePostMessage(req, res);
+	}
+
 	function startHttpServer(): Promise<void> {
 		const srv = httpServer;
 		if (!srv) {
@@ -375,7 +477,16 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			});
 			srv.listen(port, host, () => {
 				log.info(
-					{ host, port, endpoint: `http://${host}:${port}/mcp` },
+					{
+						host,
+						port,
+						endpoints: {
+							streamableHttp: `http://${host}:${port}/mcp`,
+							streamableHttpStateless: `http://${host}:${port}/sse`,
+							legacySse: `http://${host}:${port}${LEGACY_SSE_PATH}`,
+							legacyMessages: `http://${host}:${port}${LEGACY_MESSAGES_PATH}`,
+						},
+					},
 					"HTTP transport listening",
 				);
 				resolve();
@@ -398,6 +509,12 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 				await session.server.close();
 			}
 			sessions.clear();
+			// Close all legacy SSE sessions
+			for (const [id, session] of sseSessions) {
+				log.debug({ sessionId: id }, "Closing legacy SSE session on shutdown");
+				await session.server.close();
+			}
+			sseSessions.clear();
 			if (httpServer) {
 				const srv = httpServer;
 				await new Promise<void>((resolve, reject) => {
