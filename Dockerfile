@@ -1,7 +1,10 @@
 FROM node:22-slim AS builder
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin pnpm to 10: pnpm 11 no longer reads `pnpm.onlyBuiltDependencies` from
+# package.json, which blocks better-sqlite3's native build (ERR_PNPM_IGNORED_BUILDS).
+# This matches the pnpm version used in CI.
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -13,7 +16,10 @@ RUN pnpm build
 FROM node:22-slim
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin pnpm to 10: pnpm 11 no longer reads `pnpm.onlyBuiltDependencies` from
+# package.json, which blocks better-sqlite3's native build (ERR_PNPM_IGNORED_BUILDS).
+# This matches the pnpm version used in CI.
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
