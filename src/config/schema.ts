@@ -19,8 +19,33 @@ const listenSchema = z
 
 // --- Upstream server definitions ---
 
-const stdioServerSchema = z.object({
+/**
+ * Fields shared by every upstream server regardless of transport.
+ *
+ * The timeout fields control how long a single forwarded `tools/call` may run
+ * before it fails. A request that exceeds the timeout fails with a timeout
+ * error but does NOT take the upstream down — the connection stays healthy for
+ * subsequent calls.
+ */
+const baseServerFields = {
 	name: z.string().min(1),
+	/**
+	 * Per-request timeout (ms) for a forwarded tool call. Long-running tools
+	 * (e.g. heavy analytical queries) need a higher value than the MCP SDK's
+	 * 60s default.
+	 */
+	requestTimeoutMs: z.number().int().positive().default(60000),
+	/** Reset the request timeout whenever the upstream sends a progress notification. */
+	resetTimeoutOnProgress: z.boolean().default(false),
+	/**
+	 * Absolute cap (ms) on a single request even when progress notifications
+	 * keep resetting the timeout. Unset means no cap beyond requestTimeoutMs.
+	 */
+	maxTotalTimeoutMs: z.number().int().positive().optional(),
+};
+
+const stdioServerSchema = z.object({
+	...baseServerFields,
 	transport: z.literal("stdio"),
 	/** Command to spawn the MCP server. */
 	command: z.string().min(1),
@@ -33,7 +58,7 @@ const stdioServerSchema = z.object({
 });
 
 const httpServerSchema = z.object({
-	name: z.string().min(1),
+	...baseServerFields,
 	transport: z.literal("http"),
 	/** URL of the remote MCP server. */
 	url: z.string().url(),
@@ -63,6 +88,22 @@ const auditSchema = z
 	})
 	.default({});
 
+// --- Reconnect configuration ---
+
+const reconnectSchema = z
+	.object({
+		/**
+		 * Auto-reconnect an upstream after its transport dies, instead of
+		 * latching it off until the whole process restarts.
+		 */
+		enabled: z.boolean().default(true),
+		/** Initial backoff delay (ms) before the first reconnect attempt. */
+		initialDelayMs: z.number().int().positive().default(1000),
+		/** Maximum backoff delay (ms) between reconnect attempts. */
+		maxDelayMs: z.number().int().positive().default(30000),
+	})
+	.default({});
+
 // --- Full guard config ---
 
 export const guardConfigSchema = z.object({
@@ -86,6 +127,9 @@ export const guardConfigSchema = z.object({
 	/** Audit and persistence configuration. */
 	audit: auditSchema,
 
+	/** How to recover an upstream after a transport-level disconnect. */
+	reconnect: reconnectSchema,
+
 	/** Logging level. */
 	logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
@@ -98,4 +142,5 @@ export type StdioServerConfig = z.infer<typeof stdioServerSchema>;
 export type HttpServerConfig = z.infer<typeof httpServerSchema>;
 export type ListenConfig = z.infer<typeof listenSchema>;
 export type AuditConfig = z.infer<typeof auditSchema>;
+export type ReconnectConfig = z.infer<typeof reconnectSchema>;
 export type ToolRule = z.infer<typeof toolRuleSchema>;

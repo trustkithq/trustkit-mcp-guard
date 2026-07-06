@@ -18,6 +18,14 @@ function makeTool(name: string): Tool {
 function makeUpstream(name: string, tools: Tool[]): UpstreamConnection {
 	return {
 		name,
+		config: {
+			name,
+			transport: "stdio",
+			command: "test",
+			args: [],
+			requestTimeoutMs: 60000,
+			resetTimeoutOnProgress: false,
+		},
 		// biome-ignore lint/suspicious/noExplicitAny: test stub
 		client: {} as any,
 		tools,

@@ -96,6 +96,22 @@ logLevel: warn
 		expect(r3.content).toEqual([{ type: "text", text: '{"name": "mcp-guard"}' }]);
 	});
 
+	it("keeps the upstream usable after a tool call fails (no circuit-breaker latch)", async () => {
+		ctx = await setupProxy({
+			servers: [{ name: "mock", mockConfig: "e2e/configs/mock-tools-error.json" }],
+			policy: { defaultAction: "allow", rules: [] },
+		});
+
+		// A failing tool call must reject...
+		await expect(ctx.client.callTool({ name: "flaky_tool", arguments: {} })).rejects.toThrow();
+
+		// ...but it must NOT take the whole upstream down. The next call to a
+		// healthy tool on the same upstream still works. (Before the fix, the
+		// first failure latched the upstream to "down" until a restart.)
+		const result = await ctx.client.callTool({ name: "ok_tool", arguments: {} });
+		expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+	});
+
 	it("allows a mix of allowed and denied calls in the same session", async () => {
 		ctx = await setupProxy({
 			policy: {

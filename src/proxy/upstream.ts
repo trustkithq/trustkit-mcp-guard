@@ -9,6 +9,8 @@ import type { Logger } from "../logger/index.js";
 export interface UpstreamConnection {
 	/** Server name from config. */
 	name: string;
+	/** Original server config — used for reconnection and per-request timeouts. */
+	config: ServerConfig;
 	/** MCP SDK Client instance. */
 	client: Client;
 	/** Tools discovered from this upstream. */
@@ -58,6 +60,9 @@ export async function connectUpstream(
 		await client.connect(transport);
 		log.info({}, "Connected to upstream");
 	} catch (error: unknown) {
+		// Close the transport so a failed attempt doesn't leak a spawned child
+		// process across reconnect retries.
+		await transport.close().catch(() => {});
 		throw new NetworkError(`Failed to connect to upstream "${config.name}"`, {
 			retryable: true,
 			context: { upstream: config.name, transport: config.transport },
@@ -71,6 +76,7 @@ export async function connectUpstream(
 		tools = result.tools;
 		log.info({ toolCount: tools.length }, "Discovered tools");
 	} catch (error: unknown) {
+		await client.close().catch(() => {});
 		throw new NetworkError(`Failed to discover tools from upstream "${config.name}"`, {
 			retryable: true,
 			context: { upstream: config.name },
@@ -78,7 +84,7 @@ export async function connectUpstream(
 		});
 	}
 
-	return { name: config.name, client, tools, status: "up" };
+	return { name: config.name, config, client, tools, status: "up" };
 }
 
 /**

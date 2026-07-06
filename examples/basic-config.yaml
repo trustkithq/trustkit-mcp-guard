@@ -14,6 +14,13 @@ servers:
     transport: stdio
     command: npx
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    # Per-request timeout for a forwarded tool call. Raise this for upstreams
+    # with long-running tools (e.g. heavy analytical queries) — the MCP SDK
+    # default is 60000ms. A call that exceeds the timeout fails with a timeout
+    # error but does NOT take the upstream down; the next call still works.
+    # requestTimeoutMs: 300000
+    # resetTimeoutOnProgress: false   # reset the timeout on each progress notification
+    # maxTotalTimeoutMs: 600000       # absolute cap even with progress resets
 
   # Remote MCP server via HTTP
   # - name: slack
@@ -50,6 +57,14 @@ policy:
 audit:
   dbPath: ~/.mcp-guard/guard.db  # SQLite path (set to false to disable)
   retentionHours: 24             # Rolling window for audit events
+
+# Upstream reconnection. When an upstream's transport dies (child process
+# exits, connection drops), mcp-guard marks it down and auto-reconnects with
+# exponential backoff instead of latching it off until a full restart.
+reconnect:
+  enabled: true          # set false to disable auto-reconnect
+  initialDelayMs: 1000   # first backoff delay
+  maxDelayMs: 30000      # backoff ceiling
 
 # Log level: debug | info | warn | error
 logLevel: info

@@ -4,6 +4,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
 	CallToolRequestSchema,
 	ErrorCode,
@@ -19,7 +20,12 @@ import type { Logger } from "../logger/index.js";
 import { type Persistence, initPersistence } from "../persistence/index.js";
 import { PolicyEngine } from "../policy/engine.js";
 import { ToolRouter } from "./router.js";
-import { type UpstreamConnection, closeAllUpstreams, connectAllUpstreams } from "./upstream.js";
+import {
+	type UpstreamConnection,
+	closeAllUpstreams,
+	connectAllUpstreams,
+	connectUpstream,
+} from "./upstream.js";
 
 export interface McpGuardProxy {
 	/** Start the proxy: connect upstreams, build routes, listen for client. */
@@ -59,6 +65,12 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 	let persistence: Persistence | null = null;
 	let cleanupInterval: ReturnType<typeof setInterval> | undefined;
 	let httpServer: HttpServer | undefined;
+	/** Set on shutdown so reconnect loops and onclose handlers stand down. */
+	let shuttingDown = false;
+	/** Upstream names with an in-flight reconnect loop (dedupes onclose storms). */
+	const reconnecting = new Set<string>();
+	/** Pending reconnect timers, keyed by upstream name, cleared on shutdown. */
+	const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	const sessions = new Map<string, HttpSession>();
 	/**
 	 * Active legacy SSE sessions, keyed by sessionId from SSEServerTransport.
@@ -89,8 +101,10 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			}
 		}
 
-		// 3. Set up notification forwarding for tools/list_changed
-		setupToolListRefresh();
+		// 3. Wire lifecycle handlers (tool-list refresh + disconnect/reconnect)
+		for (const upstream of upstreams) {
+			wireUpstream(upstream);
+		}
 
 		// 4. Connect agent-facing transport
 		if (config.listen.transport === "stdio") {
@@ -182,12 +196,22 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			});
 		}
 
-		// Forward to upstream, then audit with duration
+		// Forward to upstream, then audit with duration. The per-request timeout
+		// comes from the upstream's config so long-running tools (e.g. heavy
+		// analytical queries) aren't cut off by the SDK's 60s default.
+		const callOptions: RequestOptions = {
+			timeout: route.upstream.config.requestTimeoutMs,
+			resetTimeoutOnProgress: route.upstream.config.resetTimeoutOnProgress,
+		};
+		if (route.upstream.config.maxTotalTimeoutMs !== undefined) {
+			callOptions.maxTotalTimeout = route.upstream.config.maxTotalTimeoutMs;
+		}
 		try {
-			const result = await route.upstream.client.callTool({
-				name: toolName,
-				arguments: params.arguments,
-			});
+			const result = await route.upstream.client.callTool(
+				{ name: toolName, arguments: params.arguments },
+				undefined,
+				callOptions,
+			);
 			audit.log({
 				tool: toolName,
 				allowed: true,
@@ -202,8 +226,12 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			};
 		} catch (error: unknown) {
 			const err = toError(error);
-			// Mark upstream as down on connection-level failures
-			markUpstreamDown(route.upstream, err.message);
+			// A failed or timed-out call does NOT take the upstream down: the
+			// connection is very likely still healthy and only this one request
+			// was slow or errored. Genuine transport death is detected by the
+			// client's `onclose` hook (see wireUpstream), which marks the
+			// upstream down and starts reconnection. This prevents a single slow
+			// query from latching the whole upstream off until a restart.
 			audit.log({
 				tool: toolName,
 				allowed: true,
@@ -220,13 +248,27 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		}
 	}
 
-	function setupToolListRefresh(): void {
-		for (const upstream of upstreams) {
-			upstream.client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-				log.info({ upstream: upstream.name }, "Upstream tools changed, refreshing");
-				await refreshToolsForUpstream(upstream);
-			});
-		}
+	/**
+	 * Wires lifecycle handlers on an upstream's client:
+	 *   - tools/list_changed → rebuild the routing table
+	 *   - onclose           → transport died; mark down and start reconnecting
+	 *   - onerror           → log transport errors
+	 *
+	 * Re-invoked after every successful reconnect because the client is replaced.
+	 */
+	function wireUpstream(upstream: UpstreamConnection): void {
+		upstream.client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+			log.info({ upstream: upstream.name }, "Upstream tools changed, refreshing");
+			await refreshToolsForUpstream(upstream);
+		});
+		upstream.client.onclose = () => {
+			if (shuttingDown) return;
+			markUpstreamDown(upstream, "Upstream transport closed");
+			startReconnect(upstream);
+		};
+		upstream.client.onerror = (error: Error) => {
+			log.warn({ upstream: upstream.name, error: error.message }, "Upstream transport error");
+		};
 	}
 
 	async function refreshToolsForUpstream(upstream: UpstreamConnection): Promise<void> {
@@ -250,6 +292,69 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		if (upstream.status === "down") return;
 		upstream.status = "down";
 		log.warn({ upstream: upstream.name, reason }, "Upstream marked as down");
+	}
+
+	/**
+	 * Starts the reconnect loop for a downed upstream. Idempotent per upstream:
+	 * repeated calls (e.g. an onclose storm) while a loop is already running are
+	 * ignored.
+	 */
+	function startReconnect(upstream: UpstreamConnection): void {
+		if (shuttingDown || reconnecting.has(upstream.name)) return;
+		if (!config.reconnect.enabled) {
+			log.warn(
+				{ upstream: upstream.name },
+				"Auto-reconnect disabled — upstream stays down until restart",
+			);
+			return;
+		}
+		reconnecting.add(upstream.name);
+		attemptReconnect(upstream, 0);
+	}
+
+	/**
+	 * Schedules one backoff reconnect attempt. On success the upstream's client
+	 * is swapped in place (keeping the same UpstreamConnection reference so
+	 * routes stay valid) and marked up. On failure it retries with exponential
+	 * backoff until it succeeds or the proxy shuts down.
+	 */
+	function attemptReconnect(upstream: UpstreamConnection, attempt: number): void {
+		if (shuttingDown) {
+			reconnecting.delete(upstream.name);
+			return;
+		}
+		const { initialDelayMs, maxDelayMs } = config.reconnect;
+		const delay = Math.min(initialDelayMs * 2 ** attempt, maxDelayMs);
+		const timer = setTimeout(async () => {
+			reconnectTimers.delete(upstream.name);
+			if (shuttingDown) {
+				reconnecting.delete(upstream.name);
+				return;
+			}
+			try {
+				log.info({ upstream: upstream.name, attempt: attempt + 1 }, "Reconnecting to upstream");
+				const fresh = await connectUpstream(upstream.config, logger);
+				upstream.client = fresh.client;
+				upstream.tools = fresh.tools;
+				upstream.status = "up";
+				wireUpstream(upstream);
+				router.buildRoutes(upstreams);
+				persistence?.toolRegistry.registerTools(upstream.name, upstream.tools);
+				reconnecting.delete(upstream.name);
+				log.info(
+					{ upstream: upstream.name, toolCount: upstream.tools.length },
+					"Upstream recovered",
+				);
+			} catch (error: unknown) {
+				log.warn(
+					{ upstream: upstream.name, attempt: attempt + 1, error: toError(error).message },
+					"Reconnect attempt failed — retrying",
+				);
+				attemptReconnect(upstream, attempt + 1);
+			}
+		}, delay);
+		timer.unref();
+		reconnectTimers.set(upstream.name, timer);
 	}
 
 	/**
@@ -496,6 +601,15 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 
 	async function close(): Promise<void> {
 		log.info({}, "Shutting down MCP Guard proxy");
+
+		// Stand down any pending reconnect loops before tearing upstreams down,
+		// so closing a client doesn't trigger a fresh reconnect via onclose.
+		shuttingDown = true;
+		for (const timer of reconnectTimers.values()) {
+			clearTimeout(timer);
+		}
+		reconnectTimers.clear();
+		reconnecting.clear();
 
 		// Race cleanup against a 5-second timeout
 		const SHUTDOWN_TIMEOUT_MS = 5000;

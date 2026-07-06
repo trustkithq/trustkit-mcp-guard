@@ -1,0 +1,14 @@
+{
+	"tools": [
+		{
+			"name": "flaky_tool",
+			"description": "Always throws upstream",
+			"error": "simulated upstream failure"
+		},
+		{
+			"name": "ok_tool",
+			"description": "Always succeeds",
+			"response": { "content": [{ "type": "text", "text": "ok" }] }
+		}
+	]
+}

@@ -55,6 +55,8 @@ describe("guardConfigSchema", () => {
 				name: "remote",
 				transport: "http",
 				url: "http://localhost:4000/mcp",
+				requestTimeoutMs: 60000,
+				resetTimeoutOnProgress: false,
 			});
 		});
 
@@ -139,6 +141,55 @@ describe("guardConfigSchema", () => {
 			if (result.servers[0].transport === "stdio") {
 				expect(result.servers[0].args).toEqual([]);
 			}
+		});
+
+		it("applies default request-timeout and reconnect settings", () => {
+			const result = guardConfigSchema.parse(validStdioConfig);
+
+			expect(result.servers[0].requestTimeoutMs).toBe(60000);
+			expect(result.servers[0].resetTimeoutOnProgress).toBe(false);
+			expect(result.servers[0].maxTotalTimeoutMs).toBeUndefined();
+			expect(result.reconnect).toEqual({
+				enabled: true,
+				initialDelayMs: 1000,
+				maxDelayMs: 30000,
+			});
+		});
+
+		it("parses custom request-timeout and reconnect overrides", () => {
+			const config = {
+				...validStdioConfig,
+				servers: [
+					{
+						name: "slow",
+						transport: "stdio",
+						command: "mcp-server",
+						requestTimeoutMs: 300000,
+						resetTimeoutOnProgress: true,
+						maxTotalTimeoutMs: 600000,
+					},
+				],
+				reconnect: { enabled: false, initialDelayMs: 500, maxDelayMs: 5000 },
+			};
+
+			const result = guardConfigSchema.parse(config);
+
+			expect(result.servers[0].requestTimeoutMs).toBe(300000);
+			expect(result.servers[0].resetTimeoutOnProgress).toBe(true);
+			expect(result.servers[0].maxTotalTimeoutMs).toBe(600000);
+			expect(result.reconnect).toEqual({
+				enabled: false,
+				initialDelayMs: 500,
+				maxDelayMs: 5000,
+			});
+		});
+
+		it("rejects a non-positive request timeout", () => {
+			const config = {
+				...validStdioConfig,
+				servers: [{ name: "bad", transport: "stdio", command: "x", requestTimeoutMs: 0 }],
+			};
+			expect(() => guardConfigSchema.parse(config)).toThrow();
 		});
 	});
 
