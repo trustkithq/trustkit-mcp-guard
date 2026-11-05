@@ -95,6 +95,16 @@ describe("AuditLogger", () => {
 		expect(audit.getEvents()).toHaveLength(3);
 	});
 
+	it("keeps only the most recent maxEvents in memory", () => {
+		const audit = new AuditLogger(logger, undefined, 2);
+
+		audit.log({ tool: "a", allowed: true, reason: "allowed" });
+		audit.log({ tool: "b", allowed: true, reason: "allowed" });
+		audit.log({ tool: "c", allowed: true, reason: "allowed" });
+
+		expect(audit.getEvents().map((e) => e.tool)).toEqual(["b", "c"]);
+	});
+
 	it("notifies sinks on each event", () => {
 		const audit = new AuditLogger(logger);
 		const sinkEvents: unknown[] = [];

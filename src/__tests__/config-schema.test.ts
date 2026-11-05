@@ -23,6 +23,8 @@ describe("guardConfigSchema", () => {
 			expect(result.listen.transport).toBe("stdio");
 			expect(result.listen.port).toBe(31415);
 			expect(result.listen.host).toBe("0.0.0.0");
+			expect(result.listen.sessionIdleTimeoutMs).toBe(1_800_000);
+			expect(result.listen.maxSessions).toBe(1000);
 			expect(result.logLevel).toBe("info");
 			expect(result.audit.dbPath).toBe("~/.mcp-guard/guard.db");
 			expect(result.audit.retentionHours).toBe(24);

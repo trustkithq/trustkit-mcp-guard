@@ -37,7 +37,14 @@ export interface McpGuardProxy {
 interface HttpSession {
 	transport: StreamableHTTPServerTransport;
 	server: Server;
+	/** performance.now() of the last request seen on this session. */
+	lastActivity: number;
+	/** POSTs still being answered; a session is never evicted mid tool call. */
+	inFlight: number;
 }
+
+/** How often idle stateful sessions are swept (at most; shorter if the idle timeout is). */
+const SESSION_SWEEP_INTERVAL_MS = 60_000;
 
 interface SseSession {
 	transport: SSEServerTransport;
@@ -64,6 +71,7 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 	let server: Server | undefined;
 	let persistence: Persistence | null = null;
 	let cleanupInterval: ReturnType<typeof setInterval> | undefined;
+	let sessionSweepInterval: ReturnType<typeof setInterval> | undefined;
 	let httpServer: HttpServer | undefined;
 	/** Set on shutdown so reconnect loops and onclose handlers stand down. */
 	let shuttingDown = false;
@@ -114,6 +122,11 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		} else {
 			setupHttpServer();
 			await startHttpServer();
+			sessionSweepInterval = setInterval(
+				sweepIdleSessions,
+				Math.min(SESSION_SWEEP_INTERVAL_MS, config.listen.sessionIdleTimeoutMs),
+			);
+			sessionSweepInterval.unref();
 		}
 
 		log.info(
@@ -457,6 +470,11 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 				sessionIdGenerator: undefined,
 			});
 			const sessionServer = createMcpServer();
+			// Nothing else references this pair; close it with the response so
+			// an aborted request cannot leave it behind.
+			res.on("close", () => {
+				void sessionServer.close();
+			});
 			await sessionServer.connect(transport);
 			await transport.handleRequest(req, res);
 			return;
@@ -468,16 +486,31 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		if (sessionId) {
 			const session = sessions.get(sessionId);
 			if (!session) {
-				log.warn({ sessionId }, "Request for unknown session");
-				res.writeHead(400, { "Content-Type": "text/plain" }).end("Unknown session");
+				// 404 (not 400) is what tells an MCP client to re-initialize —
+				// the normal path for a client whose session was evicted as idle.
+				log.debug({ sessionId }, "Request for unknown session");
+				res.writeHead(404, { "Content-Type": "application/json" }).end(
+					JSON.stringify({
+						jsonrpc: "2.0",
+						error: { code: -32001, message: "Session not found" },
+						id: null,
+					}),
+				);
 				return;
 			}
-			await session.transport.handleRequest(req, res);
-			if (method === "DELETE") {
-				log.debug({ sessionId }, "Session closed by client");
-				sessions.delete(sessionId);
-				await session.server.close();
+			session.lastActivity = performance.now();
+			// A GET is the long-lived notification stream, not work in progress:
+			// it must not keep an otherwise idle session alive.
+			if (method === "POST") {
+				session.inFlight++;
+				res.once("close", () => {
+					session.inFlight--;
+					session.lastActivity = performance.now();
+				});
 			}
+			// DELETE is handled by the transport itself: it closes, and the
+			// server's onclose below drops the session from the map.
+			await session.transport.handleRequest(req, res);
 			return;
 		}
 
@@ -487,24 +520,62 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			return;
 		}
 
+		const sessionServer = createMcpServer();
 		const transport = new StreamableHTTPServerTransport({
 			sessionIdGenerator: () => randomUUID(),
+			onsessioninitialized: (newSessionId) => {
+				evictIfAtCapacity();
+				sessions.set(newSessionId, {
+					transport,
+					server: sessionServer,
+					lastActivity: performance.now(),
+					inFlight: 0,
+				});
+				log.debug({ sessionId: newSessionId, sessions: sessions.size }, "New session created");
+			},
 		});
-		const sessionServer = createMcpServer();
+		// Set on the server, not the transport: Protocol.connect() chains its
+		// own cleanup into transport.onclose, and overwriting it skips that.
+		sessionServer.onclose = () => {
+			const id = transport.sessionId;
+			if (id && sessions.get(id)?.transport === transport) {
+				sessions.delete(id);
+				log.debug({ sessionId: id, sessions: sessions.size }, "Session closed");
+			}
+		};
 		await sessionServer.connect(transport);
-
 		await transport.handleRequest(req, res);
+	}
 
-		const newSessionId = transport.sessionId;
-		if (newSessionId) {
-			sessions.set(newSessionId, { transport, server: sessionServer });
-			log.debug({ sessionId: newSessionId }, "New session created");
-
-			transport.onclose = () => {
-				log.debug({ sessionId: newSessionId }, "Session transport closed");
-				sessions.delete(newSessionId);
-			};
+	/** Closes stateful sessions with no request for `sessionIdleTimeoutMs`. */
+	function sweepIdleSessions(): void {
+		const now = performance.now();
+		const { sessionIdleTimeoutMs } = config.listen;
+		for (const [id, session] of sessions) {
+			if (session.inFlight === 0 && now - session.lastActivity >= sessionIdleTimeoutMs) {
+				log.debug({ sessionId: id }, "Closing idle session");
+				closeSession(id, session);
+			}
 		}
+	}
+
+	/** Makes room for one more session by closing the least recently active idle ones. */
+	function evictIfAtCapacity(): void {
+		const { maxSessions } = config.listen;
+		if (sessions.size < maxSessions) return;
+		const idle = [...sessions].filter(([, s]) => s.inFlight === 0);
+		idle.sort(([, a], [, b]) => a.lastActivity - b.lastActivity);
+		for (const [id, session] of idle.slice(0, sessions.size - maxSessions + 1)) {
+			log.warn({ sessionId: id, maxSessions }, "Session limit reached, closing least recent");
+			closeSession(id, session);
+		}
+	}
+
+	function closeSession(id: string, session: HttpSession): void {
+		sessions.delete(id);
+		void session.server.close().catch((error: unknown) => {
+			log.warn({ sessionId: id, error: toError(error).message }, "Failed to close session");
+		});
 	}
 
 	/**
@@ -532,16 +603,16 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 			}
 			const transport = new SSEServerTransport(LEGACY_MESSAGES_PATH, res);
 			const sessionServer = createMcpServer();
-			await sessionServer.connect(transport);
 			const id = transport.sessionId;
-			sseSessions.set(id, { transport, server: sessionServer });
-			log.debug({ sessionId: id }, "Legacy SSE session opened");
-
-			transport.onclose = () => {
+			// Set on the server, not the transport, so Protocol's own close
+			// cleanup still runs (see the stateful /mcp session above).
+			sessionServer.onclose = () => {
 				log.debug({ sessionId: id }, "Legacy SSE session closed");
 				sseSessions.delete(id);
-				void sessionServer.close();
 			};
+			await sessionServer.connect(transport);
+			sseSessions.set(id, { transport, server: sessionServer });
+			log.debug({ sessionId: id }, "Legacy SSE session opened");
 			return;
 		}
 
@@ -616,6 +687,9 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		const cleanup = async (): Promise<void> => {
 			if (cleanupInterval) {
 				clearInterval(cleanupInterval);
+			}
+			if (sessionSweepInterval) {
+				clearInterval(sessionSweepInterval);
 			}
 			// Close all HTTP sessions
 			for (const [id, session] of sessions) {

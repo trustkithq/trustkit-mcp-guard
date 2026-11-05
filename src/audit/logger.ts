@@ -34,13 +34,20 @@ export class AuditLogger {
 	private readonly events: AuditEvent[] = [];
 	private readonly logger: Logger;
 	private readonly sinks: AuditSink[] = [];
+	private readonly maxEvents: number;
 
 	/** Session-level correlation ID, shared across all events in this session. */
 	readonly correlationId: string;
 
-	constructor(logger: Logger, correlationId?: string) {
+	/**
+	 * @param maxEvents How many recent events `getEvents()` keeps in memory.
+	 *   The logger lives as long as the process, so this must stay bounded;
+	 *   durable history belongs in a sink.
+	 */
+	constructor(logger: Logger, correlationId?: string, maxEvents = 1000) {
 		this.logger = logger.child({ component: "audit" });
 		this.correlationId = correlationId ?? randomUUID();
+		this.maxEvents = maxEvents;
 	}
 
 	/** Register an additional sink for audit events (e.g. SQLite writer). */
@@ -56,6 +63,9 @@ export class AuditLogger {
 			correlationId: this.correlationId,
 		};
 		this.events.push(entry);
+		if (this.events.length > this.maxEvents) {
+			this.events.shift();
+		}
 
 		this.logger.info(
 			{
@@ -76,7 +86,7 @@ export class AuditLogger {
 		}
 	}
 
-	/** Get all recorded events (useful for testing). */
+	/** Get the most recent recorded events, up to `maxEvents` (useful for testing). */
 	getEvents(): readonly AuditEvent[] {
 		return this.events;
 	}

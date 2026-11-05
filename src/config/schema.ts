@@ -14,6 +14,15 @@ const listenSchema = z
 		port: z.number().int().min(1).max(65535).default(31415),
 		/** HTTP host (only used when transport is "http"). */
 		host: z.string().default("0.0.0.0"),
+		/**
+		 * Close a stateful HTTP session after this long (ms) without a request.
+		 * Clients rarely send DELETE when they go away, so without this every
+		 * abandoned session stays in memory forever. A client that comes back
+		 * later gets 404 and re-initializes, as the MCP spec requires.
+		 */
+		sessionIdleTimeoutMs: z.number().int().positive().default(1_800_000),
+		/** Upper bound on concurrent stateful HTTP sessions; the least recently active is closed first. */
+		maxSessions: z.number().int().positive().default(1000),
 	})
 	.default({});
 
