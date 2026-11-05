@@ -20,6 +20,7 @@ import type { Logger } from "../logger/index.js";
 import { type Persistence, initPersistence } from "../persistence/index.js";
 import { PolicyEngine } from "../policy/engine.js";
 import { ToolRouter } from "./router.js";
+import { findTransform, transformResult } from "./transform.js";
 import {
 	type UpstreamConnection,
 	closeAllUpstreams,
@@ -140,7 +141,11 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 		const s = new Server({ name: "mcp-guard", version: "0.1.0" }, { capabilities: { tools: {} } });
 
 		s.setRequestHandler(ListToolsRequestSchema, async () => {
-			return { tools: router.allTools() };
+			const tools = router.allTools();
+			if (!config.policy.hideDeniedTools) {
+				return { tools };
+			}
+			return { tools: tools.filter((tool) => policy.evaluate(tool.name).allowed) };
 		});
 
 		s.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -233,7 +238,9 @@ export function createProxy(config: GuardConfig, logger: Logger): McpGuardProxy 
 				serverName: route.upstream.name,
 				durationMs: Math.round(performance.now() - startTime),
 			});
-			return result as {
+			const transform = findTransform(route.upstream.config.responseTransforms, toolName);
+			const shaped = transform ? transformResult(result, transform) : result;
+			return shaped as {
 				content: Array<{ type: "text"; text: string }>;
 				isError?: boolean;
 			};

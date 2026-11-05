@@ -135,4 +135,53 @@ describe("E2E: Policy enforcement", () => {
 			/denied/i,
 		);
 	});
+	it("leaves denied tools out of tools/list but still denies them by name", async () => {
+		ctx = await setupProxy({
+			policy: {
+				defaultAction: "deny",
+				rules: [
+					{ tool: "read_*", allow: true },
+					{ tool: "github_get_*", allow: true },
+				],
+			},
+		});
+
+		const { tools } = await ctx.client.listTools();
+		expect(tools.map((t) => t.name).sort()).toEqual(["github_get_repo", "read_file"]);
+		await expect(ctx.client.callTool({ name: "write_file", arguments: {} })).rejects.toThrow(
+			/denied/i,
+		);
+	});
+
+	it("advertises denied tools when hideDeniedTools is false", async () => {
+		ctx = await setupProxy({
+			policy: {
+				defaultAction: "deny",
+				rules: [{ tool: "read_*", allow: true }],
+				hideDeniedTools: false,
+			},
+		});
+
+		const { tools } = await ctx.client.listTools();
+		expect(tools).toHaveLength(5);
+	});
+
+	it("applies a server's response transform to matching tools only", async () => {
+		ctx = await setupProxy({
+			servers: [
+				{
+					name: "mock",
+					extraYaml: `    responseTransforms:
+      - tools: ["github_*"]
+        compactJson: true`,
+				},
+			],
+			policy: { defaultAction: "allow", rules: [] },
+		});
+
+		const repo = await ctx.client.callTool({ name: "github_get_repo", arguments: {} });
+		expect(repo.content).toEqual([{ type: "text", text: '{"name":"mcp-guard"}' }]);
+		const file = await ctx.client.callTool({ name: "read_file", arguments: {} });
+		expect(file.content).toEqual([{ type: "text", text: "file contents here" }]);
+	});
 });

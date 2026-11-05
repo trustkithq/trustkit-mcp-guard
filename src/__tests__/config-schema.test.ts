@@ -25,6 +25,8 @@ describe("guardConfigSchema", () => {
 			expect(result.listen.host).toBe("0.0.0.0");
 			expect(result.listen.sessionIdleTimeoutMs).toBe(1_800_000);
 			expect(result.listen.maxSessions).toBe(1000);
+			expect(result.policy.hideDeniedTools).toBe(true);
+			expect(result.servers[0].responseTransforms).toEqual([]);
 			expect(result.logLevel).toBe("info");
 			expect(result.audit.dbPath).toBe("~/.mcp-guard/guard.db");
 			expect(result.audit.retentionHours).toBe(24);
@@ -59,6 +61,7 @@ describe("guardConfigSchema", () => {
 				url: "http://localhost:4000/mcp",
 				requestTimeoutMs: 60000,
 				resetTimeoutOnProgress: false,
+				responseTransforms: [],
 			});
 		});
 
