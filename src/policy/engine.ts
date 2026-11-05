@@ -42,12 +42,16 @@ export class PolicyEngine {
 		};
 	}
 
-	/** Simple glob matching: supports trailing * only (e.g. "github_*"). */
 	private matchesTool(pattern: string, toolName: string): boolean {
-		if (pattern === "*") return true;
-		if (pattern.endsWith("*")) {
-			return toolName.startsWith(pattern.slice(0, -1));
-		}
-		return pattern === toolName;
+		return matchesGlob(pattern, toolName);
 	}
+}
+
+/** Simple glob matching: supports trailing * only (e.g. "github_*"). */
+export function matchesGlob(pattern: string, value: string): boolean {
+	if (pattern === "*") return true;
+	if (pattern.endsWith("*")) {
+		return value.startsWith(pattern.slice(0, -1));
+	}
+	return pattern === value;
 }

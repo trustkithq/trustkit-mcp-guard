@@ -20,10 +20,13 @@ export function buildConfig(options: {
 	servers?: Array<{
 		name: string;
 		mockConfig?: string;
+		/** Extra YAML lines for this server entry, indented to match its fields. */
+		extraYaml?: string;
 	}>;
 	policy?: {
 		defaultAction?: "allow" | "deny";
 		rules?: Array<{ tool: string; allow: boolean }>;
+		hideDeniedTools?: boolean;
 	};
 	audit?: { dbPath: string | false };
 }): string {
@@ -38,7 +41,7 @@ export function buildConfig(options: {
 			return `  - name: ${s.name}
     transport: stdio
     command: "${TSX_BIN}"
-    args: ["${MOCK_SERVER}", "--config", "${mockConfigPath}"]`;
+    args: ["${MOCK_SERVER}", "--config", "${mockConfigPath}"]${s.extraYaml ? `\n${s.extraYaml}` : ""}`;
 		})
 		.join("\n");
 
@@ -52,7 +55,7 @@ listen:
 servers:
 ${serverEntries}
 policy:
-  defaultAction: ${policy.defaultAction ?? "deny"}
+  defaultAction: ${policy.defaultAction ?? "deny"}${policy.hideDeniedTools === undefined ? "" : `\n  hideDeniedTools: ${policy.hideDeniedTools}`}
   rules:
 ${ruleEntries || "    []"}
 audit:

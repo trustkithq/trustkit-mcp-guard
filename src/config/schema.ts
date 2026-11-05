@@ -29,6 +29,23 @@ const listenSchema = z
 // --- Upstream server definitions ---
 
 /**
+ * Rewrites the text content of matching tool results before they reach the
+ * client, to cut the tokens an AI client spends on verbose upstream payloads.
+ * Only text content that parses as JSON is touched; anything else passes through.
+ */
+const responseTransformSchema = z.object({
+	/** Tool names or trailing-* globs (e.g. "execute_*"), matched like policy rules. */
+	tools: z.array(z.string().min(1)).min(1),
+	/** Re-serialize the JSON without indentation. */
+	compactJson: z.boolean().default(false),
+	/**
+	 * Object keys to drop at any depth, as exact names or trailing-* globs
+	 * (e.g. "results_metadata", "lib/*").
+	 */
+	omitKeys: z.array(z.string().min(1)).default([]),
+});
+
+/**
  * Fields shared by every upstream server regardless of transport.
  *
  * The timeout fields control how long a single forwarded `tools/call` may run
@@ -51,6 +68,8 @@ const baseServerFields = {
 	 * keep resetting the timeout. Unset means no cap beyond requestTimeoutMs.
 	 */
 	maxTotalTimeoutMs: z.number().int().positive().optional(),
+	/** Response rewrites for this server's tools; the first transform whose `tools` match applies. */
+	responseTransforms: z.array(responseTransformSchema).default([]),
 };
 
 const stdioServerSchema = z.object({
@@ -131,6 +150,12 @@ export const guardConfigSchema = z.object({
 		defaultAction: z.enum(["allow", "deny"]).default("deny"),
 		/** Ordered list of tool rules — first match wins. */
 		rules: z.array(toolRuleSchema).default([]),
+		/**
+		 * Leave tools the policy denies out of tools/list. A client cannot call
+		 * them anyway, and every advertised definition costs it context tokens.
+		 * Calling a hidden tool by name is still denied and audited.
+		 */
+		hideDeniedTools: z.boolean().default(true),
 	}),
 
 	/** Audit and persistence configuration. */
@@ -153,3 +178,4 @@ export type ListenConfig = z.infer<typeof listenSchema>;
 export type AuditConfig = z.infer<typeof auditSchema>;
 export type ReconnectConfig = z.infer<typeof reconnectSchema>;
 export type ToolRule = z.infer<typeof toolRuleSchema>;
+export type ResponseTransform = z.infer<typeof responseTransformSchema>;

@@ -26,9 +26,18 @@ servers:
     transport: stdio
     command: npx
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/data/project"]
+    # Optional: shrink verbose JSON results before they reach the AI client.
+    # The first transform whose `tools` match applies; non-JSON text passes through.
+    # responseTransforms:
+    #   - tools: ["search_*"]
+    #     compactJson: true                  # drop indentation
+    #     omitKeys: ["metadata", "debug_*"]  # drop these keys at any depth
 
 policy:
   defaultAction: deny
+  # Denied tools are left out of tools/list (fewer context tokens for the client).
+  # Set to false to advertise them anyway; calling one is still denied.
+  hideDeniedTools: true
 
   rules:
     - tool: "read_*"

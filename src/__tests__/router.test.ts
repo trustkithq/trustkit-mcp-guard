@@ -25,6 +25,7 @@ function makeUpstream(name: string, tools: Tool[]): UpstreamConnection {
 			args: [],
 			requestTimeoutMs: 60000,
 			resetTimeoutOnProgress: false,
+			responseTransforms: [],
 		},
 		// biome-ignore lint/suspicious/noExplicitAny: test stub
 		client: {} as any,
